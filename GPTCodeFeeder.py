@@ -12,6 +12,8 @@ openai.api_key = "your_openai_api_key"
 SAFE_MARGIN = 500  # Reserved tokens for prompt structure
 DEFAULT_TARGET_CHUNKS = 10  # Aim to keep chunks per file around this number
 VERBOSE = True  # Set to True for detailed output
+CODE_FILE_EXTENSIONS = {".py", ".js", ".cpp", ".c", ".h", ".java", ".rb", ".go", ".php", ".html", ".css"}
+AUXILIARY_FILE_EXTENSIONS = {".dll", ".so", ".exe", ".bin", ".o", ".class", ".jar", ".lib"}
 
 
 def verbose_log(message):
@@ -19,6 +21,15 @@ def verbose_log(message):
     if VERBOSE:
         print(message)
 
+def detect_file_type(file_name):
+    """Detects whether a file is a code file, auxiliary file, or other."""
+    _, ext = os.path.splitext(file_name)
+    if ext in CODE_FILE_EXTENSIONS:
+        return "code"
+    elif ext in AUXILIARY_FILE_EXTENSIONS:
+        return "auxiliary"
+    else:
+        return "other"
 
 def calculate_dynamic_token_limit(directory, target_chunks=DEFAULT_TARGET_CHUNKS):
     """Calculates a dynamic token limit based on the total size of all files."""
@@ -36,7 +47,7 @@ def calculate_dynamic_token_limit(directory, target_chunks=DEFAULT_TARGET_CHUNKS
 
 
 def display_folder_structure(directory):
-    """Generates the folder structure as a string."""
+    """Generates the folder structure as a string, including auxiliary files."""
     structure = []
     for root, dirs, files in os.walk(directory):
         level = root.replace(directory, "").count(os.sep)
@@ -50,8 +61,12 @@ def display_folder_structure(directory):
 
 def get_file_chunks(file_path, token_limit):
     """Splits a file into chunks that are within the token limit."""
-    with open(file_path, "r", encoding="utf-8") as file:
-        content = file.read()
+    try:
+        with open(file_path, "r", encoding="utf-8") as file:
+            content = file.read()
+    except UnicodeDecodeError:
+        verbose_log(f"Skipping file due to encoding error: {file_path}")
+        return []  # Return an empty list, indicating no chunks for this file
 
     chunks = []
     current_chunk = ""
@@ -168,7 +183,7 @@ def save_chunks_to_files(project_name, folder_structure, file_map, action):
 
 
 def process_directory(directory, token_limit):
-    """Processes each file in the directory, breaking them into chunks."""
+    """Processes each file in the directory, breaking code files into chunks."""
     file_map = {}
     verbose_log(f"Mapping directory structure for '{directory}'...")
     folder_structure = display_folder_structure(directory)
@@ -178,7 +193,18 @@ def process_directory(directory, token_limit):
         for file in files:
             file_path = os.path.join(root, file)
             relative_path = os.path.relpath(file_path, directory)
-            file_map[relative_path] = {"path": file_path, "chunks": get_file_chunks(file_path, token_limit)}
+            file_type = detect_file_type(file)
+
+            if file_type == "code":
+                # Process code files into chunks
+                file_map[relative_path] = {"path": file_path, "chunks": get_file_chunks(file_path, token_limit)}
+                verbose_log(f"Included for processing: {relative_path}")
+            elif file_type == "auxiliary":
+                # Log auxiliary files but do not chunk
+                verbose_log(f"Auxiliary file (excluded from processing): {relative_path}")
+            else:
+                # Log other files
+                verbose_log(f"Other file (excluded from processing): {relative_path}")
 
     verbose_log("Directory structure mapped successfully.\n")
     return file_map, folder_structure
@@ -187,7 +213,7 @@ def process_directory(directory, token_limit):
 def main():
     parser = argparse.ArgumentParser(
         description="Process a project directory for ChatGPT analysis.",
-        formatter_class=argparse.RawTextHelpFormatter  # Ensures newlines are preserved in help text
+        formatter_class=argparse.RawTextHelpFormatter  
     )
 
     parser.add_argument(
